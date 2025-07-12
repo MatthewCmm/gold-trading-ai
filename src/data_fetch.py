@@ -3,20 +3,17 @@
 import yfinance as yf
 import pandas as pd
 
-def download_gold(start: str = None, end: str = None) -> pd.DataFrame:
-    """
-    Descarga data de GC=F (oro COMEX) y devuelve
-    un DataFrame con las columnas Open, High, Low, Close, Volume.
-    """
-    df = yf.download(
-        "GC=F",
-        start=start,
-        end=end,
-        progress=False,
-        auto_adjust=False    # Importante: deja tanto Close como Adj Close.
-    )
-    # Si Yahoo te trae "Adj Close" y no quieres usarla:
-    if "Adj Close" in df.columns:
-        df = df.drop(columns=["Adj Close"])
+def download_gold(period="2y", interval="1d"):
+    df = yf.download("GC=F", period=period, interval=interval)
+
+    # --- NUEVO BLOQUE ---
+    # Si las columnas vienen en MultiIndex, quita el segundo nivel
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]  # ['Open', 'High', ...]
+    # Opcional: reordena o filtra
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    # ---------------------
+
     return df
+
 

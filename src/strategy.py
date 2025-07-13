@@ -26,34 +26,34 @@ class MACrossStrategy(Strategy):
     # Hyper-parameters
     n1, n2 = 10, 80
     atr_win     = 14
-    atr_factor  = 1.2
+    atr_factor  = 1.05
     sl_mult     = 2.0
-    trail_mult  = 1.0
+    trail_mult  = 1.3
 
     def init(self):
-        # Moving averages
-        self.ma1 = self.I(lambda x: pd.Series(x).rolling(self.n1).mean(),
-                          self.data.Close)
-        self.ma2 = self.I(lambda x: pd.Series(x).rolling(self.n2).mean(),
-                          self.data.Close)
+        # Short-term and long-term moving averages
+        self.ma1 = self.I(lambda x: pd.Series(x).rolling(self.n1).mean(), self.data.Close)
+        self.ma2 = self.I(lambda x: pd.Series(x).rolling(self.n2).mean(), self.data.Close)
 
-        # ATR (custom helper) and its 100-day mean
-        self.atr = self.I(
-            atr,
-            self.data.High, self.data.Low, self.data.Close,
-            self.atr_win,
-        )
-        self.atr_mean = self.I(
-            lambda x: pd.Series(x).rolling(100).mean(),
-            self.atr
-        )
+        # --- Long-term trend filter (200-day SMA) -------------------------
+        self.ma200 = self.I(lambda x: pd.Series(x).rolling(200).mean(), self.data.Close)
+
+        # ATR and its 100-day mean
+        self.atr = self.I(atr, self.data.High, self.data.Low, self.data.Close, self.atr_win)
+        self.atr_mean = self.I(lambda x: pd.Series(x).rolling(100).mean(), self.atr)
 
     def next(self):
+        # ---------------------------------------------------------------
+        # 0) Trend filter: only trade if price > MA200
+        # ---------------------------------------------------------------
+        if self.data.Close[-1] < self.ma200[-1]:
+            return  # Only trade in uptrends
+
         # ---------------------------------------------------------------
         # 1) Volatility filter – skip if ATR is below threshold
         # ---------------------------------------------------------------
         if self.atr[-1] < self.atr_factor * self.atr_mean[-1]:
-            return  # market too quiet → no trading
+            return  # Market too quiet → no trading
 
         # ---------------------------------------------------------------
         # 2) Moving-average crossover signals
@@ -72,7 +72,7 @@ class MACrossStrategy(Strategy):
         # ---------------------------------------------------------------
         if long_sig and not self.position.is_long:
             sl = self.data.Close[-1] - self.sl_mult * self.atr[-1]
-            self.buy(sl=sl)                 # initial protective stop
+            self.buy(size=0.5, sl=sl)       # initial protective stop
             return                          # wait for next bar
 
         # ---------------------------------------------------------------
@@ -88,14 +88,13 @@ class MACrossStrategy(Strategy):
         if self.position.is_long:
             new_sl = self.data.Close[-1] - self.trail_mult * self.atr[-1]
 
-        # Tighten the stop only if it can be moved up
-        current_sl = getattr(self.position, "sl_price", None)
-        if current_sl is None or new_sl > current_sl:
-            # For backtesting >= 0.6 use update_sl / sl_price
-            if hasattr(self.position, "update_sl"):
-                self.position.update_sl(price=new_sl)
-        else:  # fallback for even newer versions
-            self.position.sl_price = new_sl
+            # Tighten the stop only if it can be moved up
+            current_sl = getattr(self.position, "sl_price", None)
+            if current_sl is None or new_sl > current_sl:
+                if hasattr(self.position, "update_sl"):
+                    self.position.update_sl(price=new_sl)
+                else:  # fallback for even newer versions
+                    self.position.sl_price = new_sl
 
 
 

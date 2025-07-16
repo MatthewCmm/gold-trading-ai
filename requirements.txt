@@ -4,3 +4,4 @@ matplotlib
 backtesting
 pytest
 pyarrow
+scikit-learn

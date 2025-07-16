@@ -1,7 +1,5 @@
 from typing import Union
 import pandas as pd
-import numpy as np
-
 
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()

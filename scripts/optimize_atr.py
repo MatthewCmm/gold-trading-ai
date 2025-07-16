@@ -7,7 +7,10 @@ Grid-search sobre los multiplicadores de ATR:
 Guarda el ranking en results/opt_atr_<timestamp>.csv
 """
 
-import itertools, datetime as dt, os
+import itertools
+import datetime as dt
+import os
+
 import pandas as pd
 
 from src.data_fetch   import download_gold
@@ -17,9 +20,11 @@ from src.backtester   import run_backtest
 
 
 # ---------- 1. Configura el rango de búsqueda ----------------------------
-ATR_FACTORS  = [1.1, 1.2, 1.3, 1.4]
-SL_MULTS     = [1.5, 2.0, 2.5]
-TRAIL_MULTS  = [0.8, 1.0, 1.2]
+ATR_FACTORS = [1.0, 1.05, 1.1, 1.15]
+SL_MULTS    = [1.5, 2.0]
+TRAIL_MULTS = [1.0, 1.3, 1.5]
+
+
 
 # ---------- 2. Descarga datos una sola vez --------------------------------
 df = add_indicators(download_gold(start="2010-01-01"))

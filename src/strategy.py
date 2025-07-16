@@ -7,24 +7,25 @@ def atr(high, low, close, n=14):
     Vectorised ATR that works with Backtesting's _Array objects.
     """
     h = pd.Series(high)
-    l = pd.Series(low)
+    low = pd.Series(low)
     c = pd.Series(close)
 
     tr = pd.concat(
-        [
-            h - l,
-            (h - c.shift()).abs(),
-            (l - c.shift()).abs(),
-        ],
+    [
+        h - low,
+        (h - c.shift()).abs(),
+        (low - c.shift()).abs(),
+    ],
         axis=1,
     ).max(axis=1)
+
 
     return tr.rolling(n).mean()
 # ------------------------------------------------------------------------
 
 class MACrossStrategy(Strategy):
     # Hyper-parameters
-    n1, n2 = 10, 80
+    n1, n2      = 40, 180
     atr_win     = 14
     atr_factor  = 1.05
     sl_mult     = 2.0

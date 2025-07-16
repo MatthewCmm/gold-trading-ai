@@ -9,3 +9,6 @@ venv/
 .ipynb_checkpoints/
 
 results/
+
+# Jupyter checkpoints
+**/.ipynb_checkpoints/

@@ -12,3 +12,4 @@ results/
 
 # Jupyter checkpoints
 **/.ipynb_checkpoints/
+.env

@@ -10,33 +10,32 @@ RAW_DIR = "data/raw"
 OUT_DIR = "data/processed"
 
 def load_raw():
-    # Lee precios de oro
     df_px = pd.read_parquet(os.path.join(RAW_DIR, "GCF_prices.parquet"))
     df_px = df_px[["Close", "High", "Low", "Open", "Volume"]]
     df_px.columns = ["PX_Close", "PX_High", "PX_Low", "PX_Open", "PX_Volume"]
-    
-    # Lee serie macro
+
+    # Lee serie macro y convierte índice a datetime para alinear correctamente
     df_mac = pd.read_parquet(os.path.join(RAW_DIR, "T10YIE.parquet"))
-    df_mac.columns = ["BE_10YIE"]  # breakeven 10Y
-    
+    df_mac.index = pd.to_datetime(df_mac.index)
+    df_mac.columns = ["BE_10YIE"]
+
     return df_px, df_mac
 
+
 def engineer_features(df_px: pd.DataFrame, df_mac: pd.DataFrame) -> pd.DataFrame:
-    # Une por índice (fecha)
-    df = df_px.join(df_mac, how="left")
-    
-    # Lagged macro (1 mes atras)
+    # Une por índice (fecha) y forward-fill para rellenar la macro cada día
+    df = df_px.join(df_mac, how="left").ffill()
+
+    # Lagged macro (1 mes atrás)
     df["BE_10YIE_L1"] = df["BE_10YIE"].shift(1)
-    
+
     # Rolling averages del precio
     df["MA_Close_20"] = df["PX_Close"].rolling(20).mean()
     df["MA_Close_50"] = df["PX_Close"].rolling(50).mean()
-    
+
     # Rendimientos diarios
     df["Ret_Close"] = df["PX_Close"].pct_change()
-    
-    # Cualquier otra transformación...
-    
+
     return df
 
 def main():

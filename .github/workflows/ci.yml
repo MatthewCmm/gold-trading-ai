@@ -1,4 +1,6 @@
-name: CI
+      - name: Run tests
+        run: PYTHONPATH=${{ github.workspace }} pytest -q
+
 
 on: [push, pull_request]
 

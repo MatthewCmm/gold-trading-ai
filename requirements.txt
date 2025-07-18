@@ -6,3 +6,4 @@ pytest
 pyarrow
 scikit-learn
 textblob
+pandas-datareader

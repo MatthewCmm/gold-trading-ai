@@ -1,0 +1,14 @@
+README.md
+setup.cfg
+setup.py
+gold_trading_ai.egg-info/PKG-INFO
+gold_trading_ai.egg-info/SOURCES.txt
+gold_trading_ai.egg-info/dependency_links.txt
+gold_trading_ai.egg-info/top_level.txt
+src/__init__.py
+src/backtester.py
+src/data_fetch.py
+src/indicators.py
+src/main.py
+src/strategy.py
+tests/test_pipeline.py

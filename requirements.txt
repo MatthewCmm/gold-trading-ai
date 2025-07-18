@@ -5,3 +5,4 @@ backtesting
 pytest
 pyarrow
 scikit-learn
+textblob

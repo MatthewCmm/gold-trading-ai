@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # src/threshold_sweep.py
 
+import os
 import glob
 import pandas as pd
 import numpy as np
 import joblib
 from backtesting import Strategy
-from bokeh.io import save as bokeh_save, output_file
 from src.backtester import run_backtest
 from src.strategy import MACrossStrategy
 
@@ -44,7 +44,7 @@ def load_data():
     return df_price.join(df_feat, how="inner").dropna()
 
 def main():
-    df = load_data()
+    df     = load_data()
     results = []
 
     for t in thresholds:
@@ -61,5 +61,11 @@ def main():
     df_res = pd.DataFrame(results).set_index("threshold")
     print(df_res)
 
+    # ——— guarda la sweep para el paper-trade ———
+    os.makedirs("reports", exist_ok=True)
+    df_res.to_csv("reports/threshold_sweep.csv", index=True)
+    print("\n✅ Guardado reports/threshold_sweep.csv")
+
 if __name__ == "__main__":
     main()
+

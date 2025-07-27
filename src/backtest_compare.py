@@ -1,106 +1,123 @@
 #!/usr/bin/env python3
-# src/backtest_compare.py
-
 """
-Comparación de backtests entre la estrategia de cruce de medias móviles (MA-Crossover)
-y una estrategia basada en tu modelo ML entrenado, incluyendo slippage.
+Compara:
+  • Cruce de medias móviles (baseline)
+  • Estrategia ML Random-Forest
+Incluyendo comisión + slippage.
 """
 
-import glob
-import os
-import pandas as pd
-import numpy as np
+import glob, os
+from pathlib import Path
+
 import joblib
+import numpy as np
+import pandas as pd
 from backtesting import Strategy
-from bokeh.io import save as bokeh_save, output_file
+from bokeh.io import output_file, save as bokeh_save
+
 from src.backtester import run_backtest
-from src.strategy import MACrossStrategy
+from src.strategy   import MACrossStrategy
 
-# Parámetros de trading
+# ───────── parámetros ─────────
 INITIAL_CAPITAL = 10_000
-BASE_COMMISSION = 0.001  # 0.1% por trade
-SLIPPAGE_PCT    = 0.0005  # 0.05% slippage on entry/exit
+BASE_COMMISSION = 0.001
+SLIPPAGE_PCT    = 0.0005
+ML_THRESHOLD    = 0.0008
 
-# Umbral para la estrategia ML (por ejemplo 0.08% retorno previsto)
-ML_THRESHOLD = 0.0008  # calibrado para maximizar Sharpe
+RAW_PRICE_FILE  = "data/raw/GCF_prices.parquet"
+PROCESSED_DIR   = "data/processed"
+MODEL_DIR       = "models"
+REPORT_DIR      = "reports"
+# ──────────────────────────────
+
 
 class MLStrategy(Strategy):
     """
-    Strategy que utiliza el modelo ML para generar señales LONG/SHORT.
+    Estrategia long/short basada en el Random-Forest.
     """
-    feature_names: list[str] = []  # será asignado en main()
+    feature_names: list[str] = []
+    model  = None
+    scaler = None
 
     def init(self):
-        self.model  = joblib.load("models/rf_model.pkl")
-        self.scaler = joblib.load("models/scaler.pkl")
+        self.m, self.sc = type(self).model, type(self).scaler   # atajos
 
     def next(self):
-        feats = [getattr(self.data, col)[-1] for col in type(self).feature_names]
-        X   = np.array(feats).reshape(1, -1)
-        Xs  = self.scaler.transform(X)
-        pred_ret = self.model.predict(Xs)[0]
+        feats = [getattr(self.data, c)[-1] for c in type(self).feature_names]
+        xs    = self.sc.transform([feats[: self.sc.n_features_in_]])
+        pred  = self.m.predict(xs)[0]
 
-        if pred_ret > ML_THRESHOLD:
-            if not self.position.is_long:
-                self.position.close()
-                self.buy()
-        elif pred_ret < -ML_THRESHOLD:
-            if not self.position.is_short:
-                self.position.close()
-                self.sell()
-        # HOLD: no hace nada
+        if pred >  ML_THRESHOLD and not self.position.is_long:
+            self.position.close(); self.buy()
+        elif pred < -ML_THRESHOLD and not self.position.is_short:
+            self.position.close(); self.sell()
+        # si |pred| ≤ umbral ⇒ hold
 
 
-def main():
-    # 1) Carga de datos OHLCV
-    df_price = pd.read_parquet("data/raw/GCF_prices.parquet")
-    df_price.index = pd.to_datetime(df_price.index).tz_localize(None)
+# ---------- helpers ----------
+def load_price_df() -> pd.DataFrame:
+    df = pd.read_parquet(RAW_PRICE_FILE)
+    if getattr(df.columns, "nlevels", 1) > 1:
+        df.columns = df.columns.get_level_values(0)
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    # mantén prefijo para distinguir, luego renombraremos
+    return df.add_prefix("PX_")
 
-    # 2) Carga de features procesados
-    feat_files = sorted(glob.glob("data/processed/features_*.parquet"))
-    if not feat_files:
-        raise FileNotFoundError(
-            "No se encontró ningún features_*.parquet en data/processed/"
-        )
-    latest_feat = feat_files[-1]
-    df_feat = pd.read_parquet(latest_feat)
-    df_feat.index = pd.to_datetime(df_feat.index).tz_localize(None)
+def load_features_df() -> tuple[pd.DataFrame, bool]:
+    path = sorted(Path(PROCESSED_DIR).glob("features_*.parquet"))[-1]
+    is_intra = "_5m" in path.stem
+    df = pd.read_parquet(path).tz_localize(None)
+    # sólo quitamos la columna 'target' si existe
+    df = df.drop(columns="target", errors="ignore")
+    return df, is_intra
 
-    # Asignar columnas a MLStrategy
+def select_model(is_intraday: bool):
+    suf = "_intraday" if is_intraday else ""
+    mdl  = joblib.load(Path(MODEL_DIR) / f"rf_model{suf}.pkl")
+    scl  = joblib.load(Path(MODEL_DIR) / f"scaler{suf}.pkl")
+    return mdl, scl
+# ------------------------------
+
+
+def main() -> None:
+    # 1) datos
+    df_price        = load_price_df()
+    df_feat, intra  = load_features_df()
+
+    # 2) merge y limpieza
+    df_all = df_price.join(df_feat, how="inner").dropna()
+
+    # reconstruir columnas OHLCV *sin* prefijo (Backtesting las necesita)
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        px_col = f"PX_{col}"
+        if px_col in df_all.columns:
+            df_all[col] = df_all[px_col]
+            df_all.drop(columns=px_col, inplace=True)
+
+    # 3) modelo ML + features
+    model, scaler            = select_model(intra)
+    MLStrategy.model         = model
+    MLStrategy.scaler        = scaler
     MLStrategy.feature_names = df_feat.columns.tolist()
 
-    # 3) Merge precios + features
-    df = df_price.join(df_feat, how="inner").dropna()
+    comm = BASE_COMMISSION + SLIPPAGE_PCT
 
-    # 4) Backtest MA-Crossover con slippage incluido como comisión adicional
-    total_comm = BASE_COMMISSION + SLIPPAGE_PCT
-    stats_ma, bt_ma = run_backtest(
-        df,
-        MACrossStrategy,
-        cash=INITIAL_CAPITAL,
-        commission=total_comm
-    )
-    print("=== MA-Crossover Strategy (con slippage) ===")
+    # 4) backtests
+    stats_ma, bt_ma = run_backtest(df_all, MACrossStrategy,
+                                   cash=INITIAL_CAPITAL, commission=comm)
+    print("=== MA-Crossover (con slippage) ===")
     print(stats_ma)
 
-    # 5) Backtest ML-Based Strategy
-    stats_ml, bt_ml = run_backtest(
-        df,
-        MLStrategy,
-        cash=INITIAL_CAPITAL,
-        commission=total_comm
-    )
-    print("\n=== ML-Based Strategy (con slippage) ===")
+    stats_ml, bt_ml = run_backtest(df_all, MLStrategy,
+                                   cash=INITIAL_CAPITAL, commission=comm)
+    print("\n=== ML-Strategy (con slippage) ===")
     print(stats_ml)
 
-    # 6) Guardar curvas de equity como HTML
-    os.makedirs("reports", exist_ok=True)
-    plot_ma = bt_ma.plot()
-    output_file("reports/ma_crossover_equity.html")
-    bokeh_save(plot_ma)
-    plot_ml = bt_ml.plot()
-    output_file("reports/ml_equity.html")
-    bokeh_save(plot_ml)
+    # 5) gráficas
+    Path(REPORT_DIR).mkdir(exist_ok=True)
+    output_file(Path(REPORT_DIR) / "ma_crossover_equity.html"); bokeh_save(bt_ma.plot())
+    output_file(Path(REPORT_DIR) / "ml_equity.html");          bokeh_save(bt_ml.plot())
+    print("✅  HTML guardado en reports/")
 
 if __name__ == "__main__":
     main()

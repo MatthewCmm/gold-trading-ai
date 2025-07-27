@@ -3,76 +3,95 @@
 
 import os
 import glob
-import pandas as pd
+import sys
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
+from sklearn.preprocessing   import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.ensemble        import RandomForestRegressor
+from sklearn.metrics         import mean_squared_error, mean_absolute_error
 import joblib
 
-# 1) Localizar el último archivo de features
-feature_files = sorted(glob.glob("data/processed/features_*.parquet"))
+# ──────────────────────────
+PROCESSED_DIR = "data/processed"
+MODEL_DIR     = "models"
+# ──────────────────────────
+
+
+# 1) Locate latest features parquet
+feature_files = sorted(glob.glob(os.path.join(PROCESSED_DIR, "features_*.parquet")))
 if not feature_files:
-    print("No se encontró ningún archivo de features en data/processed/")
-    exit(1)
-latest_feat_path = feature_files[-1]
+    sys.exit("❌  No feature files found in data/processed/")
+feat_path = feature_files[-1]
+print(f"🔍  Using features file → {feat_path}")
 
-# 2) Cargar features procesados
-try:
-    df = pd.read_parquet(latest_feat_path)
-    df.index = pd.to_datetime(df.index)
-    print(f"Cargado features desde {latest_feat_path} con {df.shape[1]} columnas")
-except Exception as e:
-    print(f"Error al leer features: {e}")
-    exit(1)
+# 2) Intraday or daily?
+is_intraday = "_5m" in os.path.basename(feat_path)
+horizon     = "5m" if is_intraday else "1d"
 
-# 3) Definir target y eliminar filas sin target
-df["target"] = df["PX_Close"].pct_change().shift(-1)
-df = df.dropna(subset=["target"])
+# 3) Load dataframe
+df = pd.read_parquet(feat_path)
+df.index = pd.to_datetime(df.index)
+print(f"📊  Loaded {df.shape[0]} rows × {df.shape[1]} cols")
+
+# 4) Build target (next-bar %-return)
+price_col = "Close" if is_intraday else "PX_Close"
+if price_col not in df.columns:
+    sys.exit(f"❌  Expected column '{price_col}' not found in features parquet")
+
+df["target"] = df[price_col].pct_change().shift(-1)
+df.dropna(subset=["target"], inplace=True)
+
 if df.empty:
-    print("No hay datos suficientes para entrenar. Verifica el archivo de features.")
-    exit(1)
+    sys.exit("⚠️  No data left after target shift – check the features parquet.")
 
-# 4) Separar X e y usando todas las columnas menos 'target'
-feature_cols = [c for c in df.columns if c != "target"]
-print(f"Entrenando con {len(feature_cols)} features")
+# 5) Separate X / y  (keep only numeric columns)
+feature_cols = [c for c in df.columns if c not in {"target"} and np.issubdtype(df[c].dtype, np.number)]
 X = df[feature_cols].values
 y = df["target"].values
+print(f"⚙️  Training on {len(feature_cols)} numeric features, target {horizon} ahead")
 
-# 5) Escalado de features
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+# 6) Scale
+scaler = StandardScaler().fit(X)
+X_scaled = scaler.transform(X)
 
-# 6) Validación cruzada temporal
+# 7) Time-series CV
 tscv = TimeSeriesSplit(n_splits=5)
 r2_scores = []
-for i, (train_idx, test_idx) in enumerate(tscv.split(X_scaled), 1):
-    X_tr, X_te = X_scaled[train_idx], X_scaled[test_idx]
-    y_tr, y_te = y[train_idx], y[test_idx]
-    model_cv = RandomForestRegressor(n_estimators=100, random_state=42)
-    model_cv.fit(X_tr, y_tr)
-    r2 = model_cv.score(X_te, y_te)
+for fold, (tr, te) in enumerate(tscv.split(X_scaled), 1):
+    model_cv = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=None,
+        random_state=42,
+        n_jobs=-1,
+    )
+    model_cv.fit(X_scaled[tr], y[tr])
+    r2 = model_cv.score(X_scaled[te], y[te])
     r2_scores.append(r2)
-    print(f"  Fold {i} R²: {r2:.4f}")
-print("R² por fold:", r2_scores)
+    print(f"   Fold {fold} ▸ R² = {r2:.4f}")
 
-# 7) Métricas en todo el dataset con el último modelo entrenado
+print("🔗  R² per fold:", np.round(r2_scores, 4).tolist())
+
+# 8) Final fit on full set (reuse last model_cv for speed, optional full re-fit)
 model = model_cv
-y_pred = model.predict(X_scaled)
-mse = mean_squared_error(y, y_pred)
-mae = mean_absolute_error(y, y_pred)
-directional_acc = np.mean(np.sign(y_pred) == np.sign(y))
-print(f"MSE: {mse:.6f}, MAE: {mae:.6f}, Directional Accuracy: {directional_acc:.4f}")
+y_hat = model.predict(X_scaled)
 
-# 8) Importancia de features
-importances = pd.Series(model.feature_importances_, index=feature_cols)
-print("Top 10 features:")
-print(importances.sort_values(ascending=False).head(10))
+mse      = mean_squared_error(y, y_hat)
+mae      = mean_absolute_error(y, y_hat)
+dir_acc  = np.mean(np.sign(y_hat) == np.sign(y))
+print(f"📈  MSE={mse:.6f} | MAE={mae:.6f} | DirAcc={dir_acc:.4f}")
 
-# 9) Guardar modelo y scaler
-os.makedirs("models", exist_ok=True)
-joblib.dump(model, "models/rf_model.pkl")
-joblib.dump(scaler, "models/scaler.pkl")
-print(f"Modelo y scaler guardados en 'models/' (features: {len(feature_cols)})")
+# 9) Feature importances
+imp = pd.Series(model.feature_importances_, index=feature_cols)
+print("🎯  Top-10 features:")
+print(imp.sort_values(ascending=False).head(10))
 
+# 10) Save artefacts
+os.makedirs(MODEL_DIR, exist_ok=True)
+suffix      = "_intraday" if is_intraday else ""
+model_path  = os.path.join(MODEL_DIR, f"rf_model{suffix}.pkl")
+scaler_path = os.path.join(MODEL_DIR, f"scaler{suffix}.pkl")
+joblib.dump(model,  model_path)
+joblib.dump(scaler, scaler_path)
+print(f"✅  Saved model → {model_path}")
+print(f"✅  Saved scaler → {scaler_path}")

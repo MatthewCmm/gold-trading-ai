@@ -13,3 +13,4 @@ results/
 # Jupyter checkpoints
 **/.ipynb_checkpoints/
 .env
+models/*.pkl
